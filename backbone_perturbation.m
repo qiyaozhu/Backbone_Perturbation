@@ -1,6 +1,7 @@
 clc;
 clear all;
 
+%%%%%%%%%%%%%%%%%% PARAMETERS AND PATHS TO BE CHANGED %%%%%%%%%%%%%%%%%%
 addpath("top100fullStructure");
 addpath("my_functions");
 
@@ -13,19 +14,29 @@ ip_size = 100;
 % Output folder for the perturbed backbones
 output_folder = "perturbed_backbones/";
 
+% Target residues for protein binding site
+target_res = [66,67,73,81,104,105,122,134];
+
+% Chain ID for protein and peptide
+peptide_chain = "A";
+protein_chain = "B";
+
+% Ideal CA-CA distance between the peptide and the protein target residues,
+% rewards follows Gaussian distribution, mu and sigma are the mean and std
+target_mu = 6;
+target_sigma = 2;
+
 % Run the perturbation function
-perturbation(complex_name, ip_size, output_folder);
+perturbation(complex_name, target_res, ip_size, output_folder, protein_chain, peptide_chain, target_mu, target_sigma);
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function perturbation(complex_name, ip_size, output_folder)
+function perturbation(complex_name, target_res, ip_size, output_folder, protein_chain, peptide_chain, target_mu, target_sigma)
 
 % Thresholds for bond geometry deviation
 length_thresh = 0.05; % Å
 angle_thresh = 5; % degrees
 omega_thresh = 10; % degrees
-
-% Target residues for MMP8 binding specificity
-target_res = [66,67,73,81,104,105,122,134];
 
 complex = pdb2mat(complex_name+".pdb");
 X = complex.X;
@@ -38,12 +49,12 @@ element = complex.element;
 chain_id = complex.chainID;
 
 % Extract the peptide backbone
-peptide_X = X(chain_id=="A");
-peptide_Y = Y(chain_id=="A");
-peptide_Z = Z(chain_id=="A");
+peptide_X = X(chain_id==peptide_chain);
+peptide_Y = Y(chain_id==peptide_chain);
+peptide_Z = Z(chain_id==peptide_chain);
 peptide_coordinates = [peptide_X.', peptide_Y.', peptide_Z.'];
-peptide_res_num = res_num(chain_id=="A");
-peptide_atom_names = atom_names(chain_id=="A");
+peptide_res_num = res_num(chain_id==peptide_chain);
+peptide_atom_names = atom_names(chain_id==peptide_chain);
 
 n = peptide_res_num(end);
 peptide_backbone = zeros(n*4, 3);
@@ -152,7 +163,7 @@ end
 % For peptides with good bond geometry, proceed to backbone perturbation
 if bond_check
     % Build the scoring grid for rough computation of repulsive energy
-    % between the peptide and the MMP8 protein
+    % between the peptide and the protein
     grid_dx = 1;
     threshold = ceil(4/grid_dx); % distance cutoff for repulsive energy
     padding = 12;
@@ -169,17 +180,17 @@ if bond_check
     maxZ = ceil(max(Z))+grid_dx*padding;
     nZ = ceil((maxZ-minZ)/grid_dx);
 
-    % Extract MMP8 protein coordinates
-    MMP8_X = X(chain_id=="B");
-    MMP8_Y = Y(chain_id=="B");
-    MMP8_Z = Z(chain_id=="B");
-    MMP8_atom_names = atom_names(chain_id=="B");
-    MMP8_coordinates = [MMP8_X.', MMP8_Y.', MMP8_Z.'];
-    MMP8_res_names = res_names(chain_id=="B");
-    MMP8_res_num = res_num(chain_id=="B");
-    MMP8_element = element(chain_id=="B");
+    % Extract protein coordinates
+    protein_X = X(chain_id==protein_chain);
+    protein_Y = Y(chain_id==protein_chain);
+    protein_Z = Z(chain_id==protein_chain);
+    protein_atom_names = atom_names(chain_id==protein_chain);
+    protein_coordinates = [protein_X.', protein_Y.', protein_Z.'];
+    protein_res_names = res_names(chain_id==protein_chain);
+    protein_res_num = res_num(chain_id==protein_chain);
+    protein_element = element(chain_id==protein_chain);
 
-    % The neighborhood region that a grid point needs to check if MMP8 atoms
+    % The neighborhood region that a grid point needs to check if protein atoms
     % reside in for computing repulsive energy
     neighbor = [];
     for i = -threshold : 1 : threshold
@@ -207,18 +218,18 @@ if bond_check
     e_S = 0.46;
     e_H = 0.02;
 
-    % Repulsive energy weight for MMP8 backbone and side-chain atoms
+    % Repulsive energy weight for protein backbone and side-chain atoms
     w_bb = 1;
     w_sc = 0.2;
 
-    % Record which grid cells contain MMP8 atoms
+    % Record which grid cells contain protein atoms
     progrid = cell(nX, nY, nZ);
-    for i = 1 : length(MMP8_X)
-        xpos = floor((MMP8_X(i)-minX)/grid_dx)+1;
-        ypos = floor((MMP8_Y(i)-minY)/grid_dx)+1;
-        zpos = floor((MMP8_Z(i)-minZ)/grid_dx)+1;
+    for i = 1 : length(protein_X)
+        xpos = floor((protein_X(i)-minX)/grid_dx)+1;
+        ypos = floor((protein_Y(i)-minY)/grid_dx)+1;
+        zpos = floor((protein_Z(i)-minZ)/grid_dx)+1;
 
-        element = MMP8_element{i};
+        element = protein_element{i};
         if element == "C"
             atom.s = s_C;
             atom.e = e_C;
@@ -238,19 +249,19 @@ if bond_check
             fprintf("No element found for "+element+"!\n");
         end
 
-        name = MMP8_atom_names{i};
+        name = protein_atom_names{i};
         if ismember(name, ["N", "H", "CA", "C", "O", "HA", "CB"])
             atom.w = w_bb;
         else
             atom.w = w_sc;
         end
 
-        atom.pos = [MMP8_X(i), MMP8_Y(i), MMP8_Z(i)];
+        atom.pos = [protein_X(i), protein_Y(i), protein_Z(i)];
         progrid{xpos,ypos,zpos} = [progrid{xpos,ypos,zpos}, atom];
     end
 
     % Compute the repulsive energy for each grid cell, between the cell center
-    % and all MMP8 atoms in the neighborhood
+    % and all protein atoms in the neighborhood
     repulsive_grid_C = zeros(nX, nY, nZ);
     repulsive_grid_N = zeros(nX, nY, nZ);
     repulsive_grid_O = zeros(nX, nY, nZ);
@@ -262,7 +273,7 @@ if bond_check
                 % cell center coordinates
                 center = [minX+(x-0.5)*grid_dx, minY+(y-0.5)*grid_dx, minZ+(z-0.5)*grid_dx];
 
-                % for each neighbor cell, check the MMP8 atoms reside in
+                % for each neighbor cell, check the protein atoms reside in
                 for nb = 1 : size(neighbor,1)
                     neighbor_pos = [x,y,z] + neighbor(nb, :);
                     atoms = progrid{neighbor_pos(1), neighbor_pos(2), neighbor_pos(3)};
@@ -280,18 +291,14 @@ if bond_check
 
     % CA atom coordinates of the target residues for specificity
     target = [];
-    for i = 1 : length(MMP8_X)
-        if ismember(MMP8_res_num(i),target_res) && MMP8_atom_names(i)=="CA"
-            target = [target; MMP8_X(i), MMP8_Y(i), MMP8_Z(i)];
+    for i = 1 : length(protein_X)
+        if ismember(protein_res_num(i),target_res) && protein_atom_names(i)=="CA"
+            target = [target; protein_X(i), protein_Y(i), protein_Z(i)];
         end
     end
 
     % Negative scores for target region promotion
     % Use gaussian distribution for calculating score
-    % Manually adjust the mu and sigma for ASN66, GLN81, ASN104, TYR105
-    Target_mu = [6, 6, 6, 6, 7, 7, 6, 5];
-    Target_sigma = [2, 2, 2, 2, 3, 3, 2, 1];
-
     rewardgrid = zeros(nX, nY, nZ, size(target,1));
     target_grid = zeros(size(target));
     min_s = -10;
@@ -304,7 +311,7 @@ if bond_check
         target_grid(i,:) = [xpos, ypos, zpos];
 
         % Assign rewards to neighbors
-        max_dist = Target_mu(i) + 3*Target_sigma(i);
+        max_dist = target_mu + 3*target_sigma;
         [X,Y,Z]=ndgrid(-ceil(max_dist/grid_dx):ceil(max_dist/grid_dx), -ceil(max_dist/grid_dx):ceil(max_dist/grid_dx), -ceil(max_dist/grid_dx):ceil(max_dist/grid_dx));
         X = X(:);
         Y = Y(:);
@@ -313,7 +320,7 @@ if bond_check
         for k = 1 : length(X)
             if xpos+X(k)>=1 && xpos+X(k)<=nX && ypos+Y(k)>=1 && ypos+Y(k)<=nY && zpos+Z(k)>=1 && zpos+Z(k)<=nZ
                 distance = norm([X(k), Y(k), Z(k)]) * grid_dx;
-                rewardgrid(xpos+X(k), ypos+Y(k), zpos+Z(k), i) = normpdf(distance,Target_mu(i),Target_sigma(i)) / normpdf(Target_mu(i),Target_mu(i),Target_sigma(i)) * min_s;
+                rewardgrid(xpos+X(k), ypos+Y(k), zpos+Z(k), i) = normpdf(distance,target_mu,target_sigma) / normpdf(target_mu,target_mu,target_sigma) * min_s;
             end
         end
     end
@@ -339,7 +346,7 @@ if bond_check
 
     % % Sanity check for reconstructing the original input peptide
     % [coordinates, cyc] = peptide_cyc(peptide_torsions, C_start, N_start, x, y, z, bond_lengths, deg2rad(bond_angles), deg2rad(omega));
-    % plot_complex(coordinates, MMP8_coordinates, MMP8_atom_names, MMP8_res_names, MMP8_res_num, MMP8_element, n, "test.pdb");
+    % plot_complex(coordinates, protein_coordinates, protein_atom_names, protein_res_names, protein_res_num, protein_element, n, "test.pdb");
 
     % Simulated annealing parameters
     w_rep = 0.3;
@@ -356,8 +363,8 @@ if bond_check
     ramp0 = 1;
 
     % criteria for good candidates
-    rep_cri = 50;
-    target_cri = -60;
+    rep_cri = 3*n;
+    target_cri = -7*size(target_grid,1);
     cyc_cri = 0.3;
     count_cri = ceil(n/3);
 
@@ -459,7 +466,7 @@ if bond_check
 
     for cand_ind = 1 : total_cand
         filename = output_folder+complex_name+"_Perturb"+cand_ind+".pdb";
-        plot_complex(coordinates(:, cand_ind*3-2:cand_ind*3), MMP8_coordinates, MMP8_atom_names, MMP8_res_names, MMP8_res_num, MMP8_element, n, filename);
+        plot_complex(coordinates(:, cand_ind*3-2:cand_ind*3), protein_coordinates, protein_atom_names, protein_res_names, protein_res_num, protein_element, n, filename, peptide_chain, protein_chain);
     end
 end
 end
@@ -478,18 +485,18 @@ end
 
 
 % Plot the peptide backbone
-function plot_complex(peptide_coordinates, MMP8_coordinates, MMP8_atomName, MMP8_resName, MMP8_resNum, MMP8_element, n, filename)
-peptide.X = [peptide_coordinates(:,1).', MMP8_coordinates(:,1).'];
-peptide.Y = [peptide_coordinates(:,2).', MMP8_coordinates(:,2).'];
-peptide.Z = [peptide_coordinates(:,3).', MMP8_coordinates(:,3).'];
+function plot_complex(peptide_coordinates, protein_coordinates, protein_atomName, protein_resName, protein_resNum, protein_element, n, filename, peptide_chain, protein_chain)
+peptide.X = [peptide_coordinates(:,1).', protein_coordinates(:,1).'];
+peptide.Y = [peptide_coordinates(:,2).', protein_coordinates(:,2).'];
+peptide.Z = [peptide_coordinates(:,3).', protein_coordinates(:,3).'];
 
 peptide.atomNum = 1 : length(peptide.X);
-peptide.atomName = [repmat({"N", "H", "CA", "1HA", "2HA", "C", "O"}, 1, n), MMP8_atomName];
+peptide.atomName = [repmat({"N", "H", "CA", "1HA", "2HA", "C", "O"}, 1, n), protein_atomName];
 
-peptide.resName = [repmat({"GLY"}, 1, 7*n), MMP8_resName];
-peptide.resNum = [repelem(1:n, 7), MMP8_resNum];
-peptide.element = [repmat({"N", "H", "C", "H", "H", "C", "O"}, 1, n), MMP8_element];
-peptide.chainID = [repmat({"A"}, 1, size(peptide_coordinates,1)), repmat({"B"}, 1, length(MMP8_atomName))];
+peptide.resName = [repmat({"GLY"}, 1, 7*n), protein_resName];
+peptide.resNum = [repelem(1:n, 7), protein_resNum];
+peptide.element = [repmat({"N", "H", "C", "H", "H", "C", "O"}, 1, n), protein_element];
+peptide.chainID = [repmat({peptide_chain}, 1, size(peptide_coordinates,1)), repmat({protein_chain}, 1, length(protein_atomName))];
 
 peptide.outfile = filename;
 file = fopen(filename, "w");
@@ -515,7 +522,7 @@ end
 end
 
 
-% Function to calculate repulsive energy between peptide and MMP8
+% Function to calculate repulsive energy between peptide and protein
 function score = target_rep(coordinates, repulsive_grid_C, repulsive_grid_N, repulsive_grid_O, repulsive_grid_H, minX, minY, minZ, grid_dx, nX, nY, nZ)
 score = 0;
 
@@ -541,7 +548,7 @@ end
 end
 
 
-% Function to sum rewards for all MMP8 target sites.
+% Function to sum rewards for all protein target sites.
 % For each site, record the highest reward received from peptide CA atoms.
 function score = target_reward(coordinates, rewardgrid, minX, minY, minZ, grid_dx, nX, nY, nZ, target_grid)
 n = size(coordinates,1) / 7;
